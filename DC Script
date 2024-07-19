@@ -1,0 +1,107 @@
+import requests
+from bs4 import BeautifulSoup
+import re
+import csv
+
+
+initial_url = 'https://www.ncwater.org/?page=537&tl=1&aquifer=&inactive=n&net=&countyname=Duplin'
+
+# Send an HTTP GET request to the initial URL
+response = requests.get(initial_url)
+
+# List to store all the rows from all tables
+all_data = []
+headers_set = False
+
+# Function to extract table data from a given URL
+def extract_table_data(url):
+    # Send an HTTP GET request to the URL
+    response = requests.get(url)
+
+    if response.status_code == 200:
+        # Get the HTML content of the page
+        html_content = response.text
+
+        # Print the HTML content for debugging
+        print(f"HTML content of {url}:\n")
+        print(html_content[:2000])  # Print first 2000 characters of the HTML
+
+        # Use a regular expression to extract the content of the 'results' variable
+        match = re.search(r'var results = (\["<div class=\'analyteall\'.*?\]);', html_content)
+
+        if match:
+            # Extract the JavaScript array content
+            js_array_content = match.group(1)
+            
+            # Clean up the JavaScript array string
+            js_array_content = js_array_content.strip('["]')
+            js_array_content = js_array_content.replace('\\"', '"')
+            js_array_content = js_array_content.replace('\\\\/', '/')
+            js_array_content = js_array_content.replace('\\n', '')
+            js_array_content = js_array_content.replace('\\', '')
+
+            # Parse the HTML content of the table
+            soup = BeautifulSoup(js_array_content, 'html.parser')
+            
+            # Find the table with the specific ID and class
+            table = soup.find('table', id='PFAS', class_='analytes')
+            
+            if table:
+                # Extract table headers
+                headers = [header.text.strip() for header in table.find('thead').find_all('th')]
+                headers.insert(0, 'Source URL')  # Add a header for the source URL
+                
+                # Extract table rows
+                rows = []
+                for row in table.find('tbody').find_all('tr'):
+                    cells = [cell.text.strip() for cell in row.find_all(['td', 'th'])]
+                    cells.insert(0, url)  # Add the source URL to each row
+                    rows.append(cells)
+                
+                return headers, rows
+            else:
+                print(f"Table not found in {url}.")
+        else:
+            print(f"JavaScript variable 'results' not found in {url}.")
+    else:
+        print(f"Failed to retrieve the page {url}. Status code: {response.status_code}")
+
+    return None, None
+
+if response.status_code == 200:
+    # Parse the initial page
+    soup = BeautifulSoup(response.content, 'html.parser')
+    
+    # Print a portion of the HTML content for debugging
+    print(soup.prettify()[:2000])  # Print first 2000 characters of the parsed HTML
+
+    # Find all <a> tags with the specific pattern in href
+    links = soup.find_all('a', href=re.compile(r'^/\?page=\d+&id=[A-Z0-9]+'))
+    print(f"Found {len(links)} links.")
+    
+    for link in links:
+        href = link.get('href')
+        if href:
+            full_url = requests.compat.urljoin(initial_url, href)
+            print(f"Processing link: {full_url}")
+            headers, rows = extract_table_data(full_url)
+            if headers and rows:
+                if not headers_set:
+                    all_data.append(headers)
+                    headers_set = True
+                all_data.extend(rows)
+        else:
+            print(f"Invalid href in link: {link}")
+
+    # Save all extracted data to a CSV file
+    if all_data:
+        with open('Duplin_PFAS_Data.csv', 'w', newline='', encoding='utf-8') as csvfile:
+            writer = csv.writer(csvfile)
+            for row in all_data:
+                writer.writerow(row)
+        
+        print("All data has been successfully saved to 'Duplin_PFAS_Data.csv'")
+    else:
+        print("No data extracted.")
+else:
+    print(f"Failed to retrieve the initial page. Status code: {response.status_code}")
